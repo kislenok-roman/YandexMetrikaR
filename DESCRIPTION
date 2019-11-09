@@ -1,0 +1,10 @@
+Package: YandexMetrikaR
+Type: Package
+Title: R package to get data from Yandex Metrika & Yandex App Metrika
+Version: 0.1.0
+Author: Roman Kislenok
+Maintainer: Roman Kislenok <kislenok.roman@gmail.com>
+Description: Allow users to get data from Yandex Metrika and AppMetrika products
+License: What license is it under?
+Encoding: UTF-8
+LazyData: true
