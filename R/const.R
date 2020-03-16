@@ -1,5 +1,5 @@
 # https://yandex.ru/dev/metrika/doc/api2/logs/fields/hits-docpage/
-metrikaLogsAPIHitsFields <- rbindlist(list(
+metrikaLogsAPIHitsFields <- data.table::rbindlist(list(
   list(field = "watchID",                     must = FALSE),
   list(field = "counterID",                   must = FALSE),
   list(field = "date",                        must = FALSE),
@@ -77,7 +77,7 @@ metrikaLogsAPIHitsFields <- rbindlist(list(
 ))
 
 # https://yandex.ru/dev/metrika/doc/api2/logs/fields/visits-docpage/
-metrikaLogsAPIVisitsFields <- rbindlist(list(
+metrikaLogsAPIVisitsFields <- data.table::rbindlist(list(
   list(field = "visitID",                     must = TRUE),
   list(field = "counterID",                   must = FALSE),
   list(field = "watchIDs",                    must = TRUE),
