@@ -1,4 +1,5 @@
 source("R/const.R")
+source("R/util.R")
 
 # Классы
 setClass(
@@ -9,24 +10,26 @@ setClass(
   )
 )
 setClass("metrikaLogsAPI", contains = "yandexLogsAPI", slots = c("source" = "character"))
-setClass("appMetrikaLogsAPI", contains = "yandexLogsAPI")
-setClass("metrikaRequest", slots = c("source" = "ANY"))
+setClass("appMetrikaLogsAPI", contains = "yandexLogsAPI", slots = c("source" = "character"))
+setClass("metrikaRequest", slots = c("source" = "ANY", "counter" = "metrikaLogsAPI"))
 
 # Инициализация
 initMetrikaLogsAPI <- function(counter, token, source = c("visits", "hits")) {
   source <- match.arg(source)
   new("metrikaLogsAPI", counterID = counter, tokenID = token, source = source)
 }
-initAppMetrikaLogsAPI <- function(counter, token) {
-  new("appMetrikaLogsAPI", counterID = counter, tokenID = token)
+initAppMetrikaLogsAPI <- function(counter, token, source = c("events")) {
+  source <- match.arg(source)
+  new("appMetrikaLogsAPI", counterID = counter, tokenID = token, source = source)
 }
 
 # Дженерики
-setGeneric("listRequests", function(obj) { stop("NA") })
-setGeneric("cleanRequest", function(obj, requestID) { stop("NA") })
+setGeneric("listRequests", function(obj, requestID = NULL) { stop("NA") })
+setGeneric("getRequestStatus", function(obj) { stop(NA) })
+setGeneric("cleanRequest", function(obj, ...) { stop("NA") })
 setGeneric("listFields",   function(obj, filter = NULL) { stop("NA") })
 setGeneric("makeRequest",  function(obj, from = NULL, to = NULL, fields = NULL) { stop("NA") })
-setGeneric("getResult",    function(obj, requestID, callback = NULL) { stop("NA") })
+setGeneric("getResult",    function(obj, ...) { stop("NA") })
 setGeneric("refresh",      function(obj) { stop("NA")})
 
 # Методы
@@ -63,7 +66,7 @@ setMethod(
 setMethod(
   "listRequests",
   "metrikaLogsAPI",
-  function(obj) {
+  function(obj, requestID = NULL) {
     h <- curl::new_handle()
     URL <- paste0("https://api-metrika.yandex.ru/management/v1/counter/", obj@counterID, "/logrequests")
     curl::handle_setheaders(h, "Authorization" = paste0("OAuth ", obj@tokenID))
@@ -73,8 +76,18 @@ setMethod(
       req <- jsonlite::fromJSON(rawToChar(res[["content"]]))[["requests"]]
 
       if (length(req) > 0L) {
-        # TODO: return special class
-        req
+        if (!missing(requestID) && !is.null(requestID) && !is.na(requestID)) {
+          l <- list()
+          for (i in 1:nrow(req)) {
+            if (req[i, "request_id"] == requestID) {
+              l[[1]] <- req[i, ]
+              break
+            }
+          }
+          l
+        } else {
+          req
+        }
       } else {
         NULL
       }
@@ -86,30 +99,44 @@ setMethod(
 )
 
 setMethod(
+  "getRequestStatus",
+  "metrikaRequest",
+  function(obj) {
+    l <- listRequests(obj@counter, obj@source[["request_id"]])
+
+    if (is.null(l)) {
+      "nothing"
+    } else {
+      l[[1]][["status"]]
+    }
+  }
+)
+
+setMethod(
   "cleanRequest",
-  c("metrikaLogsAPI", "ANY"),
+  "metrikaLogsAPI",
   function(obj, requestID) {
     l <- listRequests(obj)
 
     if (!is.null(l)) {
       if (missing(requestID)) {
-        requestID <- l[, request_id]
+        requestID <- l[, "request_id"]
       } else {
-        requestID <- l[request_id %in% requestID, request_id]
+        requestID <- l[l[, "request_id"] %in% requestID, "request_id"]
       }
 
       if (length(requestID) > 0) {
         h <- curl::new_handle()
         curl::handle_setopt(h, copypostfields = "")
-        curl::handle_setheaders(h, "Authorization" = paste0("OAuth ", tokenID))
+        curl::handle_setheaders(h, "Authorization" = paste0("OAuth ", obj@tokenID))
         for (id in requestID) {
-          if (l[request_id == id, status] == "processed") {
+          if (l[l[, "request_id"] == id, "status"] == "processed") {
             action <- "clean"
           } else {
             action <- "cancel"
           }
 
-          URL <- paste0("https://api-metrika.yandex.ru/management/v1/counter/", counterID, "/logrequest/", id , "/", action)
+          URL <- paste0("https://api-metrika.yandex.ru/management/v1/counter/", obj@counterID, "/logrequest/", id , "/", action)
           res <- curl::curl_fetch_memory(URL, h)
 
           if (res[["status_code"]] != 200L) {
@@ -124,6 +151,14 @@ setMethod(
       warning("Nothing deleted")
       FALSE
     }
+  }
+)
+
+setMethod(
+  "cleanRequest",
+  "metrikaRequest",
+  function(obj) {
+    cleanRequest(obj@counter, obj@source[["request_id"]])
   }
 )
 
@@ -173,7 +208,8 @@ setMethod(
         "metrikaRequest",
         source = jsonlite::fromJSON(
           rawToChar(res[["content"]])
-        )[["log_request"]]
+        )[["log_request"]],
+        counter = obj
       )
     } else {
       warning("Can't access", rawToChar(res[["content"]]))
@@ -184,38 +220,38 @@ setMethod(
 
 setMethod(
   "getResult",
-  c("metrikaLogsAPI", "integer", "function"),
+  "metrikaLogsAPI",
   function(obj, requestID, callback = NULL) {
-    l <- metrikaListRequests(counterID, tokenID)
+    l <- listRequests(obj)
 
     if (!is.null(l)) {
-      l <- l[request_id == requestID & status == "processed"]
+      l <- l[l[, "request_id"] == requestID & l[, "status"] == "processed", ]
       if (nrow(l) == 1L) {
-        h <- new_handle()
-        handle_setheaders(h, "Authorization" = paste0("OAuth ", tokenID))
+        h <- curl::new_handle()
+        curl::handle_setheaders(h, "Authorization" = paste0("OAuth ", obj@tokenID))
 
         availableParts <- l[["parts"]][[1]][, "part_number"]
         parts <- vector("list", length(availableParts))
 
         for (partID in availableParts) {
           URL <- paste0(
-            "https://api-metrika.yandex.net/management/v1/counter/", counterID,
+            "https://api-metrika.yandex.net/management/v1/counter/", obj@counterID,
             "/logrequest/", requestID,
             "/part/", partID, "/download"
           )
 
-          req <- curl_fetch_memory(URL, h)
+          req <- curl::curl_fetch_memory(URL, h)
 
           if (req[["status_code"]] == 200L) {
-            parts[[partID + 1L]] <- fread(rawToChar(req[["content"]]))
+            parts[[partID + 1L]] <- data.table::fread(rawToChar(req[["content"]]))
           } else {
             warning("Part ", partID, " could not be fetched")
           }
         }
 
-        parts <- rbindlist(parts)
+        parts <- data.table::rbindlist(parts)
 
-        setnames(parts, str_remove(names(parts), "ym:(s|pv):"))
+        data.table::setnames(parts, stringr::str_remove(names(parts), "ym:(s|pv):"))
 
         parts
       } else {
@@ -226,5 +262,13 @@ setMethod(
       warning("No requests")
       NULL
     }
+  }
+)
+
+setMethod(
+  "getResult",
+  "metrikaRequest",
+  function(obj) {
+    getResult(obj@counter, obj@source[["request_id"]])
   }
 )
